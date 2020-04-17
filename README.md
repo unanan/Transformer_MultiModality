@@ -1,5 +1,5 @@
 # Transformer_MultiModality
-A project wrapping the codes for multi-modalities of Transformer, aiming to develop simply.
+A project wrapping the codes for multi-modalities of Transformer, aiming to reuse it simply.
 
 - Please explore the project by yourself for more details.
 
