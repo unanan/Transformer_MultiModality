@@ -12,3 +12,4 @@ Referenced the blog: http://nlp.seas.harvard.edu/2018/04/03/attention.html
 
 ### TODOs
 - Not finished yet
+- Provide the sample dataset
