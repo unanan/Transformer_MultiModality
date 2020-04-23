@@ -12,7 +12,7 @@ import numpy as np
 import collections
 
 from model.srcembed.resnet import ResNet50_MB, ResNet50_WD, ResNet18_BN
-# from drn import drn_d_22
+from model.srcembed.crnn import CRNN
 # from unet import UNet_Nested,DenseUNet_Nested
 
 
@@ -27,10 +27,8 @@ def attention(query, key, value, mask=None, dropout=None):
     
     scores = torch.matmul(query, key.transpose(-2, -1)) \
              / math.sqrt(d_k)
-    # print("attention: ",mask)
     if mask is not None:
         scores = scores.masked_fill(mask == 0, -1e9)
-        # print(scores)
     p_attn = F.softmax(scores, dim=-1)
     
     if dropout is not None:
@@ -47,10 +45,14 @@ class Generator(nn.Module):
         self.proj = nn.Linear(d_model, vocab)
     
     def forward(self, x):
-        # return F.log_softmax(self.proj(x), dim=-1)
-        out = F.softmax(self.proj(x), dim=-1)
+        # print("input:",x)
+        x = self.proj(x)
+        # print("Linear:", x, x.shape)
+        out = F.log_softmax(x, dim=-1)
+        # print("log_softmax:", out)
         return out
-        # return  #TODO
+        # out = F.softmax(self.proj(x), dim=-1)
+        # return out
 
 
 class LayerNorm(nn.Module):
@@ -117,8 +119,6 @@ class DecoderLayer(nn.Module):
         "Follow Figure 1 (right) for connections."
         m = memory
         
-        # print("DecoderLayer:",tgt_mask.shape)
-        
         x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
         x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
         return self.sublayer[2](x, self.feed_forward)
@@ -139,7 +139,6 @@ class MultiHeadedAttention(nn.Module):
     
     def forward(self, query, key, value, mask=None):
         "Implements Figure 2"
-        # print("MultiHeadedAttention:", mask)
         if mask is not None:
             # Same mask applied to all h heads.
             mask = mask.unsqueeze(1)
@@ -155,7 +154,6 @@ class MultiHeadedAttention(nn.Module):
              for l, x in zip(self.linears, (query, key, value))]
         
         # 2) Apply attention on all the projected vectors in batch.
-        # print("before2 attention calculate",query.shape, key.shape, value.shape)
         x, self.attn = attention(query, key, value, mask=mask,
                                  dropout=self.dropout)
         
@@ -220,7 +218,6 @@ class PositionalEncoding2d(nn.Module):
         self.register_buffer('pe', pe)
     
     def forward(self, x):
-        # print(x.shape, self.pe.shape)
         x = x + self.pe[:, :, :x.size(2), :x.size(3)]
         x = x.view(x.size(0), x.size(1), -1)
         x = x.permute([0, 2, 1]).contiguous()
@@ -245,7 +242,6 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
     
     def forward(self, x):
-        # print(x.shape, self.pe.shape)
         x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
@@ -299,7 +295,6 @@ class Embedder(nn.Module):
         if self.debug:
             for layer in self.layers:
                 x = layer(x)
-                # print debug info
         else:
             x = self.layers(x)
         return x
@@ -321,11 +316,12 @@ class TransformerCNN(nn.Module):
         self.ff_d1 = PositionwiseFeedForward(d_model, d_ff, dropout)
         
         self.position1d = PositionalEncoding(d_model, dropout)
-        self.position2d = PositionalEncoding2d(d_model=d_model, dropout=dropout, height=192, width=192)
+        self.position2d = PositionalEncoding(d_model, dropout)#PositionalEncoding2d(d_model=d_model, dropout=dropout, height=512, width=512)
         
         self.encoder = Encoder(EncoderLayer(d_model, self.attn_e1, self.ff_e1, dropout), N)
         self.decoder = Decoder(DecoderLayer(d_model, self.attn_d1, self.attn_d2, self.ff_d1, dropout), N)
-        self.src_embed = Embedder([ResNet50_WD(pretrained=False), self.position2d])
+        # self.src_embed = Embedder([ResNet50_WD(pretrained=False), self.position2d])
+        self.src_embed = Embedder([CRNN(32, 3, 554, 256), self.position2d])
         self.trg_embed = Embedder([Embeddings(d_model, trg_vocab), self.position1d])
         self.generator = Generator(d_model, trg_vocab)
         
@@ -339,7 +335,7 @@ class TransformerCNN(nn.Module):
     
     def encode(self, src, src_mask):
         srcembed = self.src_embed(src)
-        assert len(srcembed.shape) == 3, "output of src_embed must be dim-3"
+        assert len(srcembed.shape) == 3, "output of src_embed must be 3 dims"
         
         return self.encoder(srcembed, src_mask)
     
@@ -352,4 +348,3 @@ if __name__ == '__main__':
     # For Test
     # transformer = TransformerModelWithCNN()
     # model = transformer.make_model(10, 10, 2)
-    # print(model)

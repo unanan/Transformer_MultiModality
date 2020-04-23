@@ -1,17 +1,31 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
+class CrossEntropyLoss(nn.CrossEntropyLoss):
+    def __init__(self,generator, reduction='mean', ignore_index=553):
+        super(CrossEntropyLoss, self).__init__(reduction=reduction,ignore_index=ignore_index)
+        self.ignore_index = ignore_index
+        self.generator = generator
 
-class CrossEntropyLoss(nn.Module):
-    def __init__(self):
-        super(CrossEntropyLoss, self).__init__()
-        self.ignore_index = -100
-        self.criterion = nn.CrossEntropyLoss(ignore_index=self.ignore_index)
-    
-    def forward(self, x, target, mask):
-        target.masked_fill(mask=(mask == 0), value=self.ignore_index)
-        loss = self.criterion(x, target)
+    def forward(self, out, target, mask, norm=1):
+        assert target.shape == mask.shape
+        out = self.generator(out)
         
+        target = target.masked_fill(mask=mask==0, value=self.ignore_index)
+
+        # print(target)
+        if len(target.shape)==2:  #TODO
+            # out = torch.reshape(out,(out.size(0)*out.size(1), out.size(-1))).squeeze()
+            out = torch.reshape(out,(-1, out.size(-1))).squeeze()
+            # target = torch.reshape(target,(target.size(0)*target.size(1), )).squeeze()
+            target = torch.reshape(target,(-1,)).squeeze()
+
+        # print(F.log_softmax(x, 1).shape, target.shape)
+        # print(x[:2], target[:2])
+        # loss = self.criterion(x, target)
+
+        loss = super(CrossEntropyLoss, self).forward(out, target)/norm
         return loss
 
 
@@ -57,72 +71,73 @@ class FocalLoss_BCE_2d(nn.Module):
 
 
 class LabelSmoothingLoss(nn.Module):
-    "Implement label smoothing."
-    
-    def __init__(self, padding_idx, start_smoothing=0.0):
+    def __init__(self, generator, smoothing=0.01, ignore_index=-100, size_average=False):
         super(LabelSmoothingLoss, self).__init__()
-        # self.criterion = nn.KLDivLoss(size_average=False)
-        self.criterion = FocalLoss_BCE_2d(size_average=False)
-        self.padding_idx = padding_idx
-        self.confidence = 1.0 - start_smoothing
-        self.smoothing = start_smoothing
-        
+        assert 0 <= smoothing <= 1
+        self.smoothing = smoothing
+        self.criterion = nn.KLDivLoss(size_average=size_average)
+        self.generator = generator
+        self.ignore_index = ignore_index
+        self.confidence = 1 - smoothing
         self.true_dist = None
-        # self.loss = 10000.0
     
-    def forward(self, x, target, mask):
-        # assert x.size(1) == size, print(x.size(1), size)
+    def forward(self, out, target, mask, norm=1):
+        out = self.generator(out)
         
-        # target = target.unsqueeze(-1)
-        # print(target)
-        true_dist = x.data.clone()
-        size = target.shape[-1]
-        true_dist.fill_(self.smoothing / (size - 2))  # fill 0
-        # logging.info(f"smoothing:{self.smoothing}\t\tfill:{self.smoothing / (size - 2)}")
-        # true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
-        # print(true_dist.shape, target.shape)
-        true_dist.scatter_(2, target.unsqueeze(-1), self.confidence)
-        
-        true_dist[:, :, self.padding_idx] = 0
-        
-        # print(true_dist.shape, mask.shape)
-        mask = mask.unsqueeze(-1).expand(true_dist.shape)
-        # print(true_dist.shape,mask.shape)
-        # true_dist[:,self.padding_idx] = 0
-        # mask = torch.nonzero(target == self.padding_idx)
-        # if mask.dim() > 0:
-        #     # print(mask.shape)
-        #     # true_dist.index_fill_(2, mask.squeeze(), 0.0) # orginal
-        #     # true_dist[torch.arange(true_dist.size(1)).unsqueeze(1),mask] = 0.0 #test failed
-        #     # true_dist[torch.arange(true_dist.size(1)).unsqueeze(1),mask.unsqueeze(-1)] = 0.0 #test failed
-        #     for ind in mask:
-        #         true_dist[ind[0],ind[1],:] = 0.0
-        #
-        #     # true_dist[target == self.padding_idx] = 0.0
-        #     # for i, ind in enumerate(mask):
-        #     #     true_dist[i].index_fill_(0,ind,1)
-        
-        # if mask.dim() > 0:
-        #     true_dist.index_fill_(0, mask.squeeze(), 0.0)
-        
-        self.true_dist = true_dist
-        # print(x,true_dist)
-        return self.criterion(x, true_dist, mask)  # Default:, requires_grad=False
+        target = target.masked_fill(mask=mask == 0, value=self.ignore_index)
 
+        out = out.contiguous().view(-1, out.size(-1))
+        target = target.contiguous().view(-1)
+        
+        # print(out, target)
+        
+        true_dist = out.data.clone()
+        true_dist.fill_(self.smoothing / (out.size(1) - 2))  # fill 0
+        true_dist.scatter_(1, target.unsqueeze(1), self.confidence)
+
+        # true_dist[:,  self.ignore_index] = 0  #:,
+        true_dist = true_dist.masked_fill(mask=true_dist == self.ignore_index, value=0)
+        self.true_dist = true_dist
+        
+        # loss = self.criterion(out.contiguous().view(-1, out.size(-1)), target.contiguous().view(-1)) / norm
+        # print(out.dtype,target.dtype)
+        loss = self.criterion(out, true_dist) / norm
+        # print(loss.item())
+        return loss
 
 #====================================================== CritWrapper ====================================================
-
-class CritWrapper:
-    "Loss wrapper."
-    
-    def __init__(self, generator, crit=CrossEntropyLoss()):
-        self.generator = generator
-        self.criterion = crit
-    
-    def __call__(self, out, y, loss_mask, norm=1):
-        assert y.shape == loss_mask.shape
-        
-        out = self.generator(out)
-        loss = self.criterion(out, y, loss_mask) / norm
-        
-        return loss
+#
+# class CritWrapper:
+#     "Loss wrapper."
+#
+#     def __init__(self, generator, crit="crossentropy"):
+#         self.generator = generator
+#         self.ignore_index = 553
+#         # self.criterion = CrossEntropyLoss(ignore_index=self.ignore_index) #TODO
+#         self.criterion = LabelSmoothingLoss(padding_idx=self.ignore_index, start_smoothing=0.1)
+#
+#     def __call__(self, out, y, loss_mask, norm=1, loss_calc = True):
+#         assert y.shape == loss_mask.shape
+#
+#         out = self.generator(out)
+#         # y = y.masked_fill(mask=loss_mask == 0, value=553)
+#         # crit = nn.CrossEntropyLoss()#ignore_index=self.ignore_index)
+#         # if len(y.shape)==2:  #TODO
+#         #     out = torch.reshape(out,(out.size(0)*out.size(1), out.size(-1))).squeeze()
+#         #     y = torch.reshape(y,(y.size(0)*y.size(1), )).squeeze()
+#         # criterion = nn.CrossEntropyLoss(reduction='mean', ignore_index=self.ignore_index)
+#         # y = y.masked_fill(mask=loss_mask == 0, value=self.ignore_index)
+#
+#         # if len(y.shape) == 2:
+#         #     out = torch.reshape(out, (out.size(0) * out.size(1), out.size(-1))).squeeze()
+#         #     y = torch.reshape(y, (y.size(0) * y.size(1),)).squeeze()
+#         # loss = criterion(out, y)
+#         # loss = crit(out, y)
+#
+#         loss = self.criterion(out, y, loss_mask)/ 1#norm
+#
+#         print(loss.item())
+#         # loss = self.crossentropy(out, y, loss_mask) / norm
+#
+#
+#         return loss

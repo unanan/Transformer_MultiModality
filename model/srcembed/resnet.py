@@ -825,8 +825,8 @@ class ResNet50_WD(nn.Module):
         
         # print(x.shape)
         # output = torch.sigmoid(x)
-        x = x.view(x.size(0), x.size(1), -1)
-        x = x.permute([0, 2, 1]).contiguous()
+        # x = x.view(x.size(0), x.size(1), -1)
+        # x = x.permute([0, 2, 1]).contiguous()
         # x = self.avgpool(x)
         # x = torch.flatten(x, 1)
         # x = self.fc(x)

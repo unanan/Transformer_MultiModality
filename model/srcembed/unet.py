@@ -396,7 +396,7 @@ class denseunetUp(nn.Module):
 
         # initialise the blocks
         for m in self.children():
-            # if m.__class__.__name__.find('_DenseBlock') != -1: continue #TODO
+            # if m.__class__.__name__.find('_DenseBlock') != -1: continue
             init_weights(m, init_type='kaiming')
 
     def forward(self, high_feature, *low_feature):

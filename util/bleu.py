@@ -102,8 +102,8 @@ def _cook_append(test, refs, crefs, ctest):
     return crefs, ctest
 
 
-# TODO: Need to test
-def count_score(candidates, reference):
+# Deprecated
+def count_score_(candidates, reference):
     # Constant Parameters
     __method__ = 'BLEU'
     n = 4
@@ -176,11 +176,132 @@ def count_score(candidates, reference):
     return score, bleu_list
 
 
+class Bleu:
+    __method__ = 'BLEU'
+    def __init__(self):
+        self.n = 4               #Ngram
+        self.option = "average"  # / "closest"
+        self.small = 1e-9
+        self.tiny = 1e-15        ## so that if guess is 0 still return 0
+        self.verbose = 0
+        self.score = None
+    
+    
+    def calc_bleu_score_(self, candidate, reference):
+        # Variables Init
+        reflen = 0;testlen = 0
+        ctest = [];crefs = []
+        score=[0,0,0,0];bleu_list = [[] for _ in range(self.n)]
+        totalcomps = {'testlen': 0, 'reflen': 0, 'guess': [0] * self.n, 'correct': [0] * self.n}
+    
+        crefs, ctest = _cook_append(candidate, reference, crefs, ctest)
+    
+        # For each sentence
+        for comps in ctest:
+            _testlen = comps['testlen']
+            testlen += _testlen
+        
+            _reflen = _single_reflen(comps['reflen'], self.option, _testlen)
+        
+            reflen += _reflen
+        
+            for key in ['guess', 'correct']:
+                for k in range(self.n):
+                    totalcomps[key][k] += comps[key][k]
+        
+            # append per image bleu score
+            bleu = 1.
+            for k in range(self.n):
+                bleu *= (float(comps['correct'][k]) + self.tiny) \
+                        / (float(comps['guess'][k]) + self.small)
+                bleu_list[k].append(bleu ** (1. / (k + 1)))
+            ratio = (testlen + self.tiny) / (reflen + self.small)  ## N.B.: avoid zero division
+            if ratio < 1:
+                for k in range(self.n):
+                    bleu_list[k][-1] *= math.exp(1 - 1 / ratio)
+        
+            if self.verbose > 1:
+                pass
+                # print(comps, reflen)
+    
+        totalcomps['reflen'] = reflen
+        totalcomps['testlen'] = testlen
+    
+        bleus = []
+        bleu = 1.
+        for k in range(self.n):
+            bleu *= float(totalcomps['correct'][k] + self.tiny) \
+                    / (totalcomps['guess'][k] + self.small)
+            bleus.append(bleu ** (1. / (k + 1)))
+        ratio = (testlen + self.tiny) / (reflen + self.small)  ## N.B.: avoid zero division
+        if ratio < 1:
+            for k in range(self.n):
+                bleus[k] *= math.exp(1 - 1 / ratio)
+    
+        if self.verbose > 0:
+            pass
+            # print(totalcomps)
+            # print("ratio:", ratio)
+    
+        score = bleus
+        return score, bleu_list
+     
+    
+    def listdepth_(self, item):
+        if isinstance(item, list):
+            depth = 1
+            it = item
+            while all(isinstance(n, list) for n in it):
+                depth+=1
+                it = it[0]
+        else:
+            depth = 0
+        return depth
+
+
+    def __call__(self, candidates, references):
+        c_depth, r_depth = self.listdepth_(candidates),self.listdepth_(references)
+        if r_depth<c_depth or r_depth>(c_depth+1) or c_depth>2:
+            raise ValueError(f"Invalid type of candidates & references. \n {candidates}\n{references}")
+
+        scores = [];bleu_lists= []
+        if c_depth<2:
+            # single sequence
+            references = references if r_depth>c_depth else [references]
+            score, bleu_list = self.calc_bleu_score_(candidates, references)
+            scores.append(score)
+            bleu_lists.append(bleu_list)
+        else:
+            # multiple sequences
+            for c,r in zip(candidates, references):
+                r = r if r_depth>c_depth else [r]
+                score, bleu_list = self.calc_bleu_score_(c, r)
+                scores.append(score)
+                bleu_lists.append(bleu_list)
+        
+        return scores, bleu_lists
+
+   
 if __name__ == '__main__':
-    import numpy as np
+    # import numpy as np
     # print(np.average(count_score(candidates = ["This"," ", "is"," ", "a"," ", "cat"],
     #             reference = [["This"," ", "is"," ","not"," ", "a"," ", "cat"]])[0][:4]))
-    print(np.average(count_score(candidates = ["This","is","a", "cat"],
-                reference = [["This", "is","not","a", "cat"]])[0][:4]))
-    print(np.average(count_score(candidates = "This is a cat",
-                reference = ["This is not a cat"])[0][:4]))
+    # print(np.average(count_score_(candidates = ["This","is","a", "cat"],
+    #             reference = [["This", "is","not","a", "cat"]])[0][:4]))
+    # print(np.average(count_score_(candidates = "This is a cat",
+    #             reference = ["This is not a cat"])[0][:4]))
+    metric = Bleu()
+
+    print("scores:",metric(candidates=["This", "is", "a", "cat"],
+                    references=["This", "is", "not", "a", "cat"])[0])
+    print("scores:",metric(candidates = ["This", "is", "a", "cat"],
+                    references = [["This", "is","not","a", "cat"]])[0])
+    print("scores:",metric(candidates="This is a cat",
+                    references="This is not a cat")[0])
+    print("scores:",metric(candidates = "This is a cat",
+                    references = ["This is not a cat"])[0])
+
+    print("scores:",metric(candidates=[["This", "is", "a", "cat"],["The","cat","loves","the","ball"]],
+                    references=[["This", "is", "not", "a", "cat"],["The","cat","loves","balls"]])[0])
+    print("scores:",metric(candidates=[["This", "is", "a", "cat"], ["The", "cat", "loves", "the", "ball"]],
+                    references=[[["This", "is", "not", "a", "cat"]], [["The", "cat", "loves", "balls"]]])[0])
